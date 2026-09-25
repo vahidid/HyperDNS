@@ -37,7 +37,7 @@ type QuotaEnforcer interface {
 type Handler struct {
 	access       AccessProvider
 	cache        *cache.Cache
-	matcher      *matcher.Matcher
+	matcher      atomic.Pointer[matcher.Matcher]
 	upstreams    *upstream.UpstreamPool
 	telemetry    TelemetrySink
 	publicIP     string
@@ -62,12 +62,12 @@ func NewHandler(
 	h := &Handler{
 		access:    access,
 		cache:     c,
-		matcher:   m,
 		upstreams: u,
 		telemetry: t,
 		publicIP:  publicIP,
 		limiter:   newRateLimiter(defaultRateLimitQPS),
 	}
+	h.matcher.Store(m)
 	if q, ok := access.(QuotaEnforcer); ok {
 		h.quota = q
 	}
@@ -78,6 +78,14 @@ func NewHandler(
 		c.SetRefresher(h.refreshUpstream)
 	}
 	return h
+}
+
+// SetMatcher promotes a complete policy snapshot without exposing partially
+// updated rule tables to concurrent DNS queries on an edge node.
+func (h *Handler) SetMatcher(m *matcher.Matcher) {
+	if m != nil {
+		h.matcher.Store(m)
+	}
 }
 
 // refreshUpstream re-resolves one question for the cache's background refresh.
@@ -430,7 +438,8 @@ func (h *Handler) ProcessQuery(r *dns.Msg, clientIP string, protocol ...string) 
 	// 3. Custom record overrides outrank every preset rule. Both address
 	// families are answered here — previously only A was intercepted, so a
 	// client could reach the real host by asking for AAAA instead.
-	if customIP, ok := h.matcher.GetCustomRecord(domain); ok && (q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA) {
+	activeMatcher := h.matcher.Load()
+	if customIP, ok := activeMatcher.GetCustomRecord(domain); ok && (q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA) {
 		if ip := net.ParseIP(strings.TrimSpace(customIP)); ip != nil {
 			m := new(dns.Msg)
 			m.SetReply(r)
@@ -454,9 +463,9 @@ func (h *Handler) ProcessQuery(r *dns.Msg, clientIP string, protocol ...string) 
 	var action matcher.Action
 	var ruleName string
 	if activeClient != nil && len(activeClient.CustomPolicies) > 0 {
-		action, ruleName = h.matcher.MatchForClient(domain, activeClient.CustomPolicies)
+		action, ruleName = activeMatcher.MatchForClient(domain, activeClient.CustomPolicies)
 	} else {
-		action, ruleName = h.matcher.Match(domain)
+		action, ruleName = activeMatcher.Match(domain)
 	}
 
 	switch action {

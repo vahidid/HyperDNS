@@ -1,0 +1,25 @@
+[Unit]
+Description=HyperDNS Edge Node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/hyperdns
+ExecStart=/opt/hyperdns/hyperdns -role edge -server \
+    -node-id REPLACE_NODE_ID \
+    -controller-url https://REPLACE_CONTROLLER_HOST:9443 \
+    -cluster-ca /opt/hyperdns/cluster-ca.pem \
+    -join-token-file /opt/hyperdns/node.join \
+    -public-ip REPLACE_NODE_PUBLIC_IP \
+    -db /opt/hyperdns/edge-data.db \
+    -key /opt/hyperdns/edge-master.key \
+    -cluster-state /opt/hyperdns/cluster-node
+Restart=always
+RestartSec=3s
+LimitNOFILE=65535
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=multi-user.target

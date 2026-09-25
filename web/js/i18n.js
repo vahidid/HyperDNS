@@ -84,6 +84,20 @@
     'Policy': 'سیاست‌ها',
     'Rules': 'قوانین',
     'Clients': 'کلاینت‌ها',
+    'Nodes': 'نودها',
+    'Edge Nodes': 'نودهای لبه',
+    'Monitor DNS reachability and resource usage across your locations.': 'دسترسی DNS و مصرف منابع نودها را در موقعیت‌های مختلف ببینید.',
+    'Refresh status': 'به‌روزرسانی وضعیت',
+    'Add a node': 'افزودن نود',
+    'Create an enrollment, then run the generated command as root on the new server.': 'ثبت‌نام نود را بسازید و دستور تولیدشده را با دسترسی root روی سرور جدید اجرا کنید.',
+    'Node name': 'نام نود',
+    'Location': 'موقعیت',
+    'Public IPv4': 'IPv4 عمومی',
+    'Current admin password': 'رمز فعلی مدیر',
+    'Required for node changes': 'برای تغییر نود لازم است',
+    'Create install command': 'ساخت دستور نصب',
+    'Download cluster CA': 'دریافت CA کلاستر',
+    'Copy command': 'کپی دستور',
     'Stream': 'جریان زنده',
     'Connect': 'اتصال',
     'API': 'API',
@@ -1110,4 +1124,3 @@
     init();
   }
 })();
-

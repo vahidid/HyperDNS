@@ -21,6 +21,7 @@ import (
 
 	"hyperdns/internal/api"
 	"hyperdns/internal/auth"
+	"hyperdns/internal/cluster"
 	"hyperdns/internal/core/cache"
 	"hyperdns/internal/core/matcher"
 	"hyperdns/internal/core/upstream"
@@ -58,6 +59,7 @@ type WebServer struct {
 	subListenMu   sync.Mutex
 	stopServerCtx context.CancelFunc
 	api           *api.API
+	cluster       *cluster.Controller
 	loginLimiter  *service.LoginAttemptTracker
 	benchmark     *service.BenchmarkRunner
 	sseTickets    *sseTicketStore
@@ -211,6 +213,10 @@ func (ws *WebServer) SetSubscriptionSettings(s *database.SubscriptionSettings) {
 	ws.subSettings = s
 }
 
+func (ws *WebServer) SetClusterController(c *cluster.Controller) {
+	ws.cluster = c
+}
+
 // serverSettingsView is the shape of ServerSettings that leaves the process.
 //
 // The point of hashing the admin password is that the verifier stays where it is
@@ -318,6 +324,10 @@ func (ws *WebServer) BuildHandler() http.Handler {
 		//    panel is linked from here.
 		if p == "/" {
 			ws.serveLandingPage(w, r)
+			return
+		}
+		if strings.HasPrefix(p, "/edge/bootstrap/") || strings.HasPrefix(p, "/edge/binary/") {
+			ws.handleEdgeBootstrap(w, r)
 			return
 		}
 
@@ -658,6 +668,8 @@ func (ws *WebServer) buildAdminMux() *http.ServeMux {
 	mux.HandleFunc("/api/diagnostics/run", ws.requireAuth(ws.handleDiagnosticsRun))
 	mux.HandleFunc("/api/stats", ws.requireAuth(ws.handleStats))
 	mux.HandleFunc("/api/clients", ws.requireAuth(ws.handleClients))
+	mux.HandleFunc("/api/nodes", ws.requireAuth(ws.handleNodes))
+	mux.HandleFunc("/api/nodes/", ws.requireAuth(ws.handleNodeAction))
 	mux.HandleFunc("/api/clients/add", ws.requireAuth(ws.handleClientsAdd))
 	mux.HandleFunc("/api/clients/delete", ws.requireAuth(ws.handleClientsDelete))
 	mux.HandleFunc("/api/clients/add_ip", ws.requireAuth(ws.handleClientsAddIP))
@@ -722,6 +734,7 @@ func (ws *WebServer) buildAdminMux() *http.ServeMux {
 			"/panel":     true,
 			"/home":      true,
 			"/clients":   true,
+			"/nodes":     true,
 			"/rules":     true,
 			"/policy":    true,
 			"/logs":      true,

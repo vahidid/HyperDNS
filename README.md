@@ -42,6 +42,7 @@
 | **[API.md](docs/API.md)** | REST API v1 (deprecated) and v2, with Python / Node.js / cURL samples. |
 | **[docs/PRESET_CATALOG.md](docs/PRESET_CATALOG.md)** | The full 171+ preset catalog, by category. |
 | **[CHANGELOG.md](docs/CHANGELOG.md)** | Release history and the fix behind each one. |
+| **[CLUSTER.md](docs/CLUSTER.md)** | Controller and edge setup, enrollment, synchronization, and current limits. |
 | **[README.fa.md](README.fa.md)** | راهنمای فارسی. |
 
 ## 📖 Overview

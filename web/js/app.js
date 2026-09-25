@@ -155,6 +155,17 @@ document.addEventListener('DOMContentLoaded', () => {
   // inside have to be watching already or they miss the modal that is up first.
   initModalA11y();
   checkAuthAndBoot();
+  document.getElementById('node-add')?.addEventListener('click', createNode);
+  document.getElementById('node-ca-download')?.addEventListener('click', downloadClusterCA);
+  document.getElementById('nodes-refresh')?.addEventListener('click', () => loadNodes());
+  document.getElementById('node-copy-command')?.addEventListener('click', copyNodeInstallCommand);
+  setInterval(() => {
+    if (!document.getElementById('tab-nodes')?.classList.contains('hidden')) loadNodes(true);
+  }, 15000);
+  document.addEventListener('hyperdns:lang', () => {
+    if (lastNodesData) renderNodes(lastNodesData);
+    if (lastNodeEnrollment) showNodeEnrollment(lastNodeEnrollment.node, lastNodeEnrollment.token);
+  });
 
   // The API docs live under the admin namespace too, and the anchor's href in
   // index.html is a static "/api/v1/docs" that cannot know the install's path.
@@ -1917,6 +1928,7 @@ function pushChartData(val) {
 const tabRoutes = {
   'dashboard': '/home',
   'clients': '/clients',
+  'nodes': '/nodes',
   'policy': '/rules',
   'stream': '/logs',
   'api': '/api',
@@ -1930,6 +1942,7 @@ const routeTabs = {
   '/panel': 'dashboard',
   '/login': 'dashboard',
   '/clients': 'clients',
+  '/nodes': 'nodes',
   '/rules': 'policy',
   '/policy': 'policy',
   '/logs': 'stream',
@@ -1967,6 +1980,9 @@ function switchTab(target, updateUrl = true) {
     if (target === 'clients') {
       loadClients();
     }
+    if (target === 'nodes') {
+      loadNodes();
+    }
     // Returning to the Logs view repaints the stream from the buffer: the
     // per-query DOM work was skipped while another tab was showing (see
     // pushStreamQuery), so this is where the queued history becomes rows.
@@ -2000,6 +2016,228 @@ function handleRouteFromURL() {
   const path = withoutBase || '/home';
   const targetTab = routeTabs[path] || 'dashboard';
   switchTab(targetTab, false);
+}
+
+let clusterCA = '';
+let clusterControllerURL = '';
+let lastNodesData = null;
+let lastNodeEnrollment = null;
+let nodeInstallCommand = '';
+
+function nodeText(en, fa) {
+  return window.HyperI18N?.lang() === 'fa' ? fa : en;
+}
+
+function nodeElement(tag, className, value) {
+  const item = document.createElement(tag);
+  if (className) item.className = className;
+  if (value !== undefined) item.textContent = value;
+  return item;
+}
+
+function nodeBytes(value) {
+  const n = Number(value) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${(n / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function nodeMetric(label, value) {
+  const box = nodeElement('div', 'node-metric');
+  box.append(nodeElement('span', 'node-metric-label', label), nodeElement('strong', 'node-metric-value', String(value)));
+  return box;
+}
+
+function nodeSummary(label, value) {
+  const box = nodeElement('div', 'node-summary-item');
+  box.append(nodeElement('span', 'node-summary-label', label), nodeElement('strong', 'node-summary-value', String(value)));
+  return box;
+}
+
+function renderNodes(data) {
+  const list = document.getElementById('nodes-list');
+  const summary = document.getElementById('nodes-summary');
+  const message = document.getElementById('nodes-message');
+  if (!list || !summary || !message) return;
+  const nodes = data.nodes || [];
+  if (lastNodeEnrollment && !nodes.some(n => n.id === lastNodeEnrollment.node.id && n.enabled && !n.enrolled)) {
+    lastNodeEnrollment = null;
+    nodeInstallCommand = '';
+    document.getElementById('node-enrollment')?.classList.add('hidden');
+  }
+  const now = Date.now();
+  const connected = nodes.filter(n => n.enabled && n.enrolled && n.last_seen && now - Date.parse(n.last_seen) < 45000);
+  const ready = connected.filter(n => n.probe?.dns_reachable && n.probe?.checked_at && now - Date.parse(n.probe.checked_at) < 90000);
+  const rtts = ready.map(n => n.probe.dns_rtt_ms).filter(n => Number.isFinite(n));
+  summary.replaceChildren(
+    nodeSummary(nodeText('Total nodes', 'کل نودها'), nodes.length),
+    nodeSummary(nodeText('Connected', 'متصل'), connected.length),
+    nodeSummary(nodeText('DNS reachable', 'DNS در دسترس'), ready.length),
+    nodeSummary(nodeText('Average DNS RTT', 'میانگین تأخیر DNS'), rtts.length ? `${(rtts.reduce((a, b) => a + b, 0) / rtts.length).toFixed(1)} ms` : '—')
+  );
+  message.textContent = `${nodeText('Controller', 'کنترلر')}: ${data.controller_url || '—'} · ${nodeText('Auto refresh every 15 seconds', 'به‌روزرسانی خودکار هر ۱۵ ثانیه')}`;
+  list.replaceChildren();
+  if (!nodes.length) {
+    list.append(nodeElement('p', 'glass-panel p-5 text-sm text-slate-400', nodeText('No nodes yet. Create an install command above.', 'هنوز نودی ثبت نشده است. از فرم بالا دستور نصب بسازید.')));
+    return;
+  }
+  for (const node of nodes) {
+    const age = node.last_seen ? now - Date.parse(node.last_seen) : Infinity;
+    const connectedNow = node.enabled && node.enrolled && age < 45000;
+    const probeFresh = node.enabled && node.probe?.checked_at && now - Date.parse(node.probe.checked_at) < 90000;
+    const teleFresh = connectedNow && node.telemetry?.captured_at && now - Date.parse(node.telemetry.captured_at) < 45000;
+    const tele = teleFresh ? node.telemetry : null;
+    const status = !node.enabled ? 'disabled' : !node.enrolled ? 'pending' : connectedNow ? 'online' : 'offline';
+    const statusLabel = {
+      disabled: nodeText('Disabled', 'غیرفعال'), pending: nodeText('Awaiting join', 'در انتظار اتصال'),
+      online: nodeText('Connected', 'متصل'), offline: nodeText('Offline', 'آفلاین')
+    }[status];
+    const card = nodeElement('article', 'glass-panel node-card');
+    const head = nodeElement('div', 'node-card-head');
+    const identity = nodeElement('div');
+    identity.append(
+      nodeElement('h3', 'node-card-title', node.name),
+      nodeElement('p', 'node-card-subtitle', `${node.location || nodeText('Location not set', 'موقعیت ثبت نشده')} · ${node.public_ip}`)
+    );
+    head.append(identity, nodeElement('span', `node-status ${status}`, statusLabel));
+    const metrics = nodeElement('div', 'node-metrics');
+    metrics.append(
+      nodeMetric(nodeText('DNS UDP RTT', 'تأخیر DNS UDP'), probeFresh ? (node.probe.dns_reachable && Number.isFinite(node.probe.dns_rtt_ms) ? `${node.probe.dns_rtt_ms.toFixed(1)} ms` : nodeText('Timeout', 'بدون پاسخ')) : '—'),
+      nodeMetric(nodeText('DNS TCP', 'DNS TCP'), probeFresh ? (node.probe.tcp_reachable ? nodeText('Open', 'باز') : nodeText('Closed', 'بسته')) : '—'),
+      nodeMetric(nodeText('Queries / sec', 'کوئری / ثانیه'), tele ? tele.dns_qps.toFixed(1) : '—'),
+      nodeMetric(nodeText('Total queries', 'کل کوئری‌ها'), tele ? tele.dns_queries.toLocaleString('en-US') : '—'),
+      nodeMetric(nodeText('Server CPU', 'پردازندهٔ سرور'), tele && tele.cpu_percent >= 0 ? `${tele.cpu_percent.toFixed(1)}%` : '—'),
+      nodeMetric(nodeText('Server RAM', 'حافظهٔ سرور'), tele && tele.memory_percent >= 0 ? `${tele.memory_percent.toFixed(1)}%` : '—'),
+      nodeMetric(nodeText('Active relays', 'رله‌های فعال'), tele ? tele.active_relays : '—'),
+      nodeMetric(nodeText('Proxy sent / received', 'پروکسی ارسال / دریافت'), tele ? `${nodeBytes(tele.proxy_bytes_sent)} / ${nodeBytes(tele.proxy_bytes_recv)}` : '—')
+    );
+    const lastSync = node.last_seen ? new Date(node.last_seen).toLocaleString('en-GB') : '—';
+    const meta = nodeElement('p', 'node-card-meta', `${nodeText('Last sync', 'آخرین همگام‌سازی')}: ${lastSync} · ${nodeText('Uptime', 'مدت فعالیت')}: ${tele ? Math.floor(tele.uptime_sec / 60) + ' ' + nodeText('min', 'دقیقه') : '—'}`);
+    const probeTime = node.probe?.checked_at ? new Date(node.probe.checked_at).toLocaleString('en-GB') : '—';
+    const probeMeta = nodeElement('p', 'node-card-meta', `${nodeText('Last DNS probe', 'آخرین تست DNS')}: ${probeTime}`);
+    const revision = nodeElement('p', 'node-card-meta', `${nodeText('Policy revision', 'نسخهٔ سیاست‌ها')}: ${node.revision ? node.revision.slice(0, 12) : '—'} · ${nodeText('Node ID', 'شناسهٔ نود')}: ${node.id}`);
+    const actions = nodeElement('div', 'node-actions');
+    const actionButton = (label, action, enabled, danger) => {
+      const button = nodeElement('button', `node-action${danger ? ' danger' : ''}`, label);
+      button.type = 'button';
+      button.addEventListener('click', () => changeNode(node.id, action, enabled, node));
+      return button;
+    };
+    actions.append(
+      actionButton(node.enabled ? nodeText('Disable', 'غیرفعال کردن') : nodeText('Enable', 'فعال کردن'), 'enabled', !node.enabled),
+      actionButton(nodeText('Reset join', 'بازنشانی اتصال'), 'reset-enrollment', false),
+      actionButton(nodeText('Delete', 'حذف'), 'delete', false, true)
+    );
+    card.append(head, metrics, meta, probeMeta, revision, actions);
+    list.append(card);
+  }
+}
+
+async function loadNodes(silent = false) {
+  const message = document.getElementById('nodes-message');
+  const list = document.getElementById('nodes-list');
+  if (!message || !list) return;
+  if (!silent) message.textContent = nodeText('Loading nodes…', 'در حال دریافت وضعیت نودها…');
+  try {
+    const res = await fetch(api('/api/nodes'), { cache: 'no-store', headers: { 'Authorization': `Bearer ${authToken}` } });
+    if (!res.ok) {
+      message.textContent = res.status === 409
+        ? nodeText('Node management requires -role controller.', 'مدیریت نودها به اجرای سرور با ‎-role controller نیاز دارد.')
+        : await errorMessage(res, nodeText('Could not load nodes', 'دریافت نودها ناموفق بود'));
+      list.replaceChildren();
+      return;
+    }
+    const data = await res.json();
+    clusterCA = data.ca_pem || '';
+    clusterControllerURL = data.controller_url || '';
+    lastNodesData = data;
+    renderNodes(data);
+  } catch (e) {
+    message.textContent = nodeText('Could not reach the controller.', 'اتصال به کنترلر برقرار نشد.');
+  }
+}
+
+async function createNode() {
+  const password = document.getElementById('node-password')?.value || '';
+  const body = {
+    name: document.getElementById('node-name')?.value.trim() || '',
+    location: document.getElementById('node-location')?.value.trim() || '',
+    public_ip: document.getElementById('node-ip')?.value.trim() || '',
+    password
+  };
+  try {
+    const res = await fetch(api('/api/nodes'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) { showToast(await errorMessage(res, nodeText('Could not create node', 'ساخت نود ناموفق بود')), 'error'); return; }
+    const data = await res.json();
+    clusterCA = data.ca_pem || clusterCA;
+    clusterControllerURL = data.controller_url || clusterControllerURL;
+    showNodeEnrollment(data.node, data.join_token);
+    document.getElementById('node-password').value = '';
+    showToast(nodeText('Node created. Run the one-time command on the new server.', 'نود ساخته شد. دستور یک‌بارمصرف را روی سرور جدید اجرا کنید.'), 'success');
+    loadNodes();
+  } catch (e) {
+    showToast(nodeText('Could not reach the controller', 'اتصال به کنترلر برقرار نشد'), 'error');
+  }
+}
+
+function showNodeEnrollment(node, token) {
+  lastNodeEnrollment = { node, token };
+  const command = document.getElementById('node-enrollment-command');
+  const url = `${window.location.origin}/edge/bootstrap/${node.id}/${token}`;
+  nodeInstallCommand = `curl -fsSL '${url}' | sudo bash`;
+  command.textContent = nodeInstallCommand;
+  document.getElementById('node-enrollment-title').textContent = nodeText('One-time install command', 'دستور نصب یک‌بارمصرف');
+  document.getElementById('node-copy-command').textContent = nodeText('Copy command', 'کپی دستور');
+  document.getElementById('node-enrollment-note').textContent = nodeText(
+    'Run on the new Linux server. The panel HTTPS address must be reachable from that server. The command contains a one-time secret.',
+    'روی سرور لینوکسی جدید اجرا کنید. آدرس HTTPS پنل باید از آن سرور در دسترس باشد. این دستور حاوی رمز یک‌بارمصرف است.'
+  );
+  document.getElementById('node-enrollment')?.classList.remove('hidden');
+}
+
+async function copyNodeInstallCommand() {
+  if (!nodeInstallCommand) return;
+  try {
+    await navigator.clipboard.writeText(nodeInstallCommand);
+    showToast(nodeText('Command copied', 'دستور کپی شد'), 'success');
+  } catch (e) {
+    showToast(nodeText('Copy failed. Select the command manually.', 'کپی انجام نشد؛ دستور را دستی انتخاب کنید.'), 'error');
+  }
+}
+
+async function changeNode(id, action, enabled, node) {
+  if (action === 'delete' && !window.confirm(nodeText('Delete this node and revoke its access?', 'این نود حذف شود و دسترسی آن لغو شود؟'))) return;
+  const password = document.getElementById('node-password')?.value || '';
+  try {
+    const res = await fetch(api(`/api/nodes/${id}/${action}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+      body: JSON.stringify({ password, enabled })
+    });
+    if (!res.ok) { showToast(await errorMessage(res, nodeText('Could not update node', 'به‌روزرسانی نود ناموفق بود')), 'error'); return; }
+    const data = await res.json();
+    if (action === 'reset-enrollment') showNodeEnrollment(node, data.join_token);
+    document.getElementById('node-password').value = '';
+    showToast(nodeText('Node updated', 'نود به‌روزرسانی شد'), 'success');
+    loadNodes();
+  } catch (e) {
+    showToast(nodeText('Could not reach the controller', 'اتصال به کنترلر برقرار نشد'), 'error');
+  }
+}
+
+function downloadClusterCA() {
+  if (!clusterCA) { showToast(nodeText('Load the controller details first', 'ابتدا اطلاعات کنترلر را دریافت کنید'), 'error'); return; }
+  const url = URL.createObjectURL(new Blob([clusterCA], { type: 'application/x-pem-file' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'hyperdns-cluster-ca.pem';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 window.addEventListener('popstate', () => {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/miekg/dns"
 	"hyperdns/internal/netutil"
@@ -13,6 +14,7 @@ import (
 
 type DoHHandler struct {
 	dnsHandler *Handler
+	tokensMu   sync.RWMutex
 	// tokens, when non-empty, are the only values a DoH client may present as
 	// ?token= to be served. Comparison is constant-time per entry. An empty
 	// list means the endpoint is open to whoever the access layer allows.
@@ -28,12 +30,16 @@ func NewDoHHandler(h *Handler) *DoHHandler {
 // config.json doh_tokens) — previously the card wrote the list and nothing
 // ever read it (v2.1.0 B-07 remediation).
 func (h *DoHHandler) SetDoHTokens(tokens []string) {
-	h.tokens = tokens
+	h.tokensMu.Lock()
+	h.tokens = append([]string(nil), tokens...)
+	h.tokensMu.Unlock()
 }
 
 // tokenOK reports whether the request's ?token= is accepted. Constant-time
 // per entry so a wrong guess reveals nothing about which prefix matched.
 func (h *DoHHandler) tokenOK(r *http.Request) bool {
+	h.tokensMu.RLock()
+	defer h.tokensMu.RUnlock()
 	if len(h.tokens) == 0 {
 		return true
 	}

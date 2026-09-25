@@ -44,6 +44,7 @@
 | **[docs/API.md](docs/API.md)** | مرجع کامل REST API v1 (قدیمی) و v2، با نمونه‌کد برای Python، Node.js و cURL. |
 | **[docs/PRESET_CATALOG.md](docs/PRESET_CATALOG.md)** | کاتالوگ جامع بیش از ۱۷۱ بازی، پلتفرم و سرویس، تفکیک‌شده بر اساس دسته‌بندی. |
 | **[docs/CHANGELOG.md](docs/CHANGELOG.md)** | تاریخچهٔ کامل انتشار نسخه‌ها و باگ‌های رفع‌شده. |
+| **[docs/CLUSTER.md](docs/CLUSTER.md)** | راه‌اندازی کنترلر و نودهای Edge، ثبت امن، همگام‌سازی و محدودیت‌های فعلی چندنودی. |
 | **[docs/TUTORIAL.fa.md](docs/TUTORIAL.fa.md)** | آموزش گام‌به‌گام و کامل: از خرید سرور تا اضافه‌کردن کلاینت و دامنهٔ کاستوم برای پورتال مشترکین. **بهترین نقطهٔ شروع.** |
 
 ---

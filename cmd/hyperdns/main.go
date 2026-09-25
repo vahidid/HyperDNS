@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"flag"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"hyperdns/internal/bootstrap"
+	"hyperdns/internal/cluster"
 	"hyperdns/internal/control"
 	"hyperdns/internal/core/cache"
 	"hyperdns/internal/core/dns"
@@ -57,12 +59,33 @@ func main() {
 	daemonMode := flag.Bool("daemon", false, "Run as background server engine (for systemd)")
 	serverMode := flag.Bool("server", false, "Run as background server engine")
 	showVersion := flag.Bool("version", false, "Print version information")
+	role := flag.String("role", "standalone", "Runtime role: standalone, controller, or edge")
+	clusterBind := flag.String("cluster-bind", "0.0.0.0:9443", "Controller's private mTLS listener")
+	controllerURL := flag.String("controller-url", "", "HTTPS URL of the cluster controller, for edge enrollment and sync")
+	nodeID := flag.String("node-id", "", "Edge node ID issued by the controller")
+	joinTokenFile := flag.String("join-token-file", "", "Root-only file containing a one-time edge enrollment token")
+	clusterCA := flag.String("cluster-ca", "", "Path to the controller's cluster CA certificate on an edge")
+	clusterState := flag.String("cluster-state", "", "Directory for the edge client certificate and key")
 	flag.Parse()
 
 	if *showVersion {
 		_, exitCode := runPreDBCommand([]string{"-version"}, *configPath, os.Stdout, os.Stderr)
 		if exitCode != 0 {
 			os.Exit(exitCode)
+		}
+		return
+	}
+	if *role != "standalone" && *role != "controller" && *role != "edge" {
+		log.Fatalf("[Main] Invalid role %q", *role)
+	}
+	if *role == "edge" {
+		if err := runEdge(edgeOptions{
+			DBPath: *dbPath, KeyPath: *keyPath, ConfigPath: *configPath,
+			BindHost: *bindHost, DNSPort: *dnsPort, PublicIP: *publicIP,
+			ControllerURL: *controllerURL, NodeID: *nodeID, TokenFile: *joinTokenFile,
+			CAFile: *clusterCA, StateDir: *clusterState,
+		}); err != nil {
+			log.Fatalf("[Edge] %v", err)
 		}
 		return
 	}
@@ -539,6 +562,17 @@ func main() {
 	)
 	webServer.SetSubscriptionSettings(subscriptionSettings)
 	webServer.SetAuthSettings(authSettings)
+	var clusterController *cluster.Controller
+	if *role == "controller" {
+		if *controllerURL == "" {
+			log.Fatal("[Main] -controller-url is required in controller mode (e.g. https://controller.example.com:9443)")
+		}
+		clusterController, err = cluster.NewController(db, *controllerURL)
+		if err != nil {
+			log.Fatalf("[Main] Cluster controller: %v", err)
+		}
+		webServer.SetClusterController(clusterController)
+	}
 
 	// v2.2.0: the embedded ACME client replaces certbot/acme.sh. It ships in
 	// the binary (an offline install can issue the moment it has internet,
@@ -702,6 +736,17 @@ func main() {
 	if err := webServer.Start(); err != nil {
 		cleanupControlAfterStartupFailure(controlServer)
 		log.Fatalf("[Main] Failed to start Web Server: %v", err)
+	}
+	if clusterController != nil {
+		if err := clusterController.Start(*clusterBind); err != nil {
+			log.Fatalf("[Main] Failed to start cluster listener: %v", err)
+		}
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = clusterController.Stop(ctx)
+		}()
+		log.Printf("[Main] Cluster controller listening on %s", *clusterBind)
 	}
 
 	stopWatcher := clientService.StartExpirationWatcher(1 * time.Minute)

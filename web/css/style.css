@@ -992,12 +992,12 @@ input:checked + .slider:before {
 }
 
 /* Mobile Bottom Navigation Glow */
-/* Sizing lives here rather than on seven class lists. Each item fills the bar's height
+/* Sizing lives here rather than on eight class lists. Each item fills the bar's height
    instead of floating inside it: the bar used to be `py-2` around a 32px column — 48px of
    chrome carrying a 32px target — and is now `py-1` around a 40px item, the same 48px bar
    with a 40px target. WCAG 2.2 SC 2.5.8 asks for 24, Material asks for 48, and 40 is what
-   fits once the bar keeps its height. `flex: 1` also makes the seven targets equal width and
-   gapless (360 / 7 ≈ 51px each, enough for the widest label, "Clients", at 10px), so a thumb
+   fits once the bar keeps its height. `flex: 1` also makes the eight targets equal width and
+   gapless (360 / 8 = 45px), so a thumb
    landing between two labels hits one of them rather than the bar itself. */
 .mobile-nav-item {
   flex: 1 1 0%;
@@ -1012,3 +1012,46 @@ input:checked + .slider:before {
 .mobile-nav-item.active i {
   filter: drop-shadow(0 0 6px rgba(0, 240, 255, 0.6));
 }
+
+/* Nodes follows the panel's existing inset/raised surface scale in both themes. */
+.node-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .65rem; }
+.node-summary-item, .node-metric {
+  background: rgb(var(--c-slate-950) / .72);
+  border: 1px solid rgb(var(--c-slate-700));
+  border-radius: .7rem;
+  padding: .72rem .85rem;
+  min-width: 0;
+}
+.node-summary-label, .node-metric-label { color: rgb(var(--c-slate-400)); font-size: .7rem; }
+.node-summary-value { display: block; margin-top: .22rem; color: rgb(var(--c-white)); font: 700 1.3rem/1.25 'JetBrains Mono', monospace; direction: ltr; text-align: start; }
+.node-form-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; }
+.node-field { display: flex; flex-direction: column; gap: .35rem; min-width: 0; color: rgb(var(--c-slate-300)); font-size: .73rem; }
+.node-field input { width: 100%; min-width: 0; padding: .62rem .7rem; border-radius: .6rem; border: 1px solid rgb(var(--c-slate-700)); background: rgb(var(--c-slate-950)); color: rgb(var(--c-white)); font-size: .82rem; }
+.node-field input:focus-visible, .node-primary-btn:focus-visible, .node-secondary-btn:focus-visible, .node-action:focus-visible { outline: 2px solid rgb(var(--c-cyan-400)); outline-offset: 2px; }
+.node-primary-btn, .node-secondary-btn, .node-action { border-radius: .6rem; padding: .55rem .85rem; font-size: .75rem; font-weight: 700; transition: background .15s ease, border-color .15s ease; }
+.node-primary-btn { background: rgb(var(--c-cyan-500)); color: rgb(var(--c-slate-950)); }
+.node-primary-btn:hover { background: rgb(var(--c-cyan-400)); }
+.node-secondary-btn, .node-action { color: rgb(var(--c-slate-200)); background: rgb(var(--c-slate-800)); border: 1px solid rgb(var(--c-slate-700)); }
+.node-secondary-btn:hover, .node-action:hover { border-color: rgb(var(--c-cyan-400) / .55); }
+.node-enrollment { padding: 1rem; border-radius: .75rem; border: 1px solid rgb(var(--c-amber-500) / .45); background: rgb(var(--c-slate-950)); }
+.node-command { overflow-wrap: anywhere; white-space: pre-wrap; padding: .8rem; margin: .55rem 0; border-radius: .55rem; color: rgb(var(--c-cyan-300)); background: rgb(var(--c-slate-900)); font: .74rem/1.7 'JetBrains Mono', monospace; text-align: left; user-select: all; }
+.node-list-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .85rem; }
+.node-card { padding: 1rem; min-width: 0; }
+.node-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: .75rem; }
+.node-card-title { color: rgb(var(--c-white)); font-size: .95rem; font-weight: 700; }
+.node-card-subtitle { color: rgb(var(--c-slate-400)); font-size: .72rem; margin-top: .2rem; overflow-wrap: anywhere; }
+.node-status { display: inline-flex; align-items: center; gap: .35rem; border-radius: 99px; padding: .28rem .52rem; white-space: nowrap; font-size: .7rem; font-weight: 700; }
+.node-status::before { content: ''; width: .42rem; height: .42rem; border-radius: 50%; background: currentColor; }
+.node-status.online { color: rgb(var(--c-emerald-400)); background: rgb(var(--c-emerald-500) / .1); }
+.node-status.offline { color: rgb(var(--c-red-400)); background: rgb(var(--c-red-500) / .1); }
+.node-status.pending, .node-status.disabled { color: rgb(var(--c-amber-400)); background: rgb(var(--c-amber-500) / .1); }
+.node-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .45rem; margin: .9rem 0; }
+.node-metric { padding: .58rem .65rem; }
+.node-metric-value { display: block; margin-top: .15rem; color: rgb(var(--c-white)); font: 700 .78rem/1.4 'JetBrains Mono', monospace; direction: ltr; overflow-wrap: anywhere; }
+.node-card-meta { color: rgb(var(--c-slate-500)); font-size: .7rem; line-height: 1.55; overflow-wrap: anywhere; }
+.node-actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .8rem; }
+.node-action.danger { color: rgb(var(--c-red-400)); }
+@media (max-width: 1000px) { .node-form-grid, .node-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .node-list-grid { grid-template-columns: 1fr; } .node-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 440px) { .node-card-head { flex-direction: column; } }
+@media (prefers-reduced-motion: reduce) { .node-primary-btn, .node-secondary-btn, .node-action { transition: none; } }
