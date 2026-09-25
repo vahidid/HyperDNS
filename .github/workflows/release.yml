@@ -103,6 +103,7 @@ jobs:
           cp offline-bundle/version.json offline_temp/version.json
           cp scripts/uninstall.sh offline_temp/scripts/uninstall.sh
           cp scripts/restore.sh offline_temp/scripts/restore.sh
+          cp scripts/update.sh offline_temp/scripts/update.sh
           cp offline-bundle/README.txt offline_temp/README.txt
           cp offline-bundle/migrate-from-v1.sh offline_temp/migrate-from-v1.sh
           chmod +x offline_temp/install.sh offline_temp/hyperdns offline_temp/scripts/*.sh offline_temp/migrate-from-v1.sh

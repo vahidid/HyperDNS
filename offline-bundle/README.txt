@@ -26,6 +26,8 @@ WHAT'S IN THIS PACKAGE
   version.json          Build version metadata (2.2.0-beta / HyperSHIELD).
   scripts/uninstall.sh  Clean uninstaller.
   scripts/restore.sh    Restore an uninstall backup (requires Python 3).
+  scripts/update.sh     Update an installed service from a new Linux binary,
+                        retaining a complete rollback backup.
   LICENSE               AGPL-3.0.
 
   NOTE: data.db, master.key and certs/ are NOT shipped — a fresh install

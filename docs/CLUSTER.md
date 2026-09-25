@@ -154,6 +154,45 @@ service probe from the controller; it is not an ICMP ping or a measurement from
 the end user's location. A firewall that blocks controller-to-edge DNS probes
 can show a failed probe while other clients can still use the edge.
 
+## 4. Updating an installed controller or edge
+
+Use [`scripts/update.sh`](../scripts/update.sh) instead of rerunning the
+standalone installer. Build the Linux binary from this source revision for the
+architecture reported by `uname -m` on each server (`x86_64` = `amd64`,
+`aarch64` = `arm64`):
+
+```sh
+mkdir -p build
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o build/hyperdns-linux-amd64 ./cmd/hyperdns
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o build/hyperdns-linux-arm64 ./cmd/hyperdns
+```
+
+Update the **controller first**. For an amd64 controller, from your workstation:
+
+```sh
+scp build/hyperdns-linux-amd64 scripts/update.sh version.json root@CONTROLLER:/tmp/
+ssh root@CONTROLLER 'bash /tmp/update.sh hyperdns /tmp/hyperdns-linux-amd64 /tmp/version.json'
+```
+
+Then update each existing edge, selecting its own architecture:
+
+```sh
+scp build/hyperdns-linux-amd64 scripts/update.sh version.json root@EDGE:/tmp/
+ssh root@EDGE 'bash /tmp/update.sh hyperdns-edge /tmp/hyperdns-linux-amd64 /tmp/version.json'
+```
+
+The script checks the new binary before stopping the service, takes a consistent
+root-only archive of `/opt/hyperdns` under `/root/hyperdns-update-backups`,
+replaces the binary atomically, and requires a stable service process for
+20 seconds. On a failed start it restores the whole previous install and
+restarts the old service. It leaves systemd role arguments, certificates,
+enrollment credentials, firewall rules and resolver settings in place. The
+`version.json` argument is optional, but passing the matching file keeps the
+controller's disk version check aligned with its embedded version. Afterward,
+check `systemctl status hyperdns` or `systemctl status hyperdns-edge`, the
+journal, and the Nodes dashboard. Existing edges need the new binary to report
+their detailed telemetry.
+
 ### Current boundaries
 
 - There is no Anycast/global load balancer. Users must select a node IP
