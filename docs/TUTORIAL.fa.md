@@ -81,9 +81,8 @@ curl -fsSL https://raw.githubusercontent.com/IzumiRain/HyperDNS/v2.2.0-beta.1/sc
   -o install.sh
 
 # ضروری: دامنهٔ پنل، و یک ایمیل برای مرجع گواهی
-HYPERDNS_DOMAIN=dns.example.com \
-HYPERDNS_EMAIL=you@example.com \
-sudo bash install.sh
+sudo env HYPERDNS_DOMAIN=dns.example.com \
+  HYPERDNS_EMAIL=you@example.com bash install.sh
 ```
 
 </div>
@@ -95,6 +94,8 @@ sudo bash install.sh
 - گواهی Let's Encrypt برای دامنهٔ پنل را **خودش**، روی لیسنر پورت ۸۰ خودش صادر می‌کند. نه certbot، نه acme.sh، نه توقف سرویس. اگر صدور ناموفق باشد، دلیل را چاپ کرده و خارج می‌شود — هرگز روی یک نصب خراب پیام موفقیت نمی‌دهد.
 - **هیچ‌وقت درجا ارتقا نمی‌دهد.** اگر نصب قبلی پیدا کند، آن را در `/root/hyperdns-preinstall-<date>.tar.gz` آرشیو می‌کند (با چاپ sha256 آن — تنها کپی از داده‌های قدیمی) و بعد کامل جایگزین می‌کند: کانفیگ تازه، اعتبارنامهٔ تازه، گواهی تازه. در حالت تعاملی باید کلمهٔ `FRESH` تایپ شود تا پاک‌سازی تأیید گردد؛ و در حالت `curl | bash` به‌جز با `HYPERDNS_FRESH=1` اصلاً قبول نمی‌کند.
 - `systemd-resolved` را کنار می‌گذارد (چون روی 127.0.0.53:53 می‌نشیند و پورت ۵۳ را می‌گیرد) با یک فایل drop-in در `/etc/systemd/resolved.conf.d/hyperdns.conf` و دسترسی‌های ایمن (دایرکتوری `755`، فایل `644`).
+- هنگام نصب، فعال‌سازی Controller برای نودهای Edge را پیشنهاد می‌دهد. در نصب خودکار `HYPERDNS_ROLE=controller` را تنظیم کنید؛ حالت پیش‌فرض `standalone` است. Controller روی پورت TCP 9443 با دامنهٔ پنل در دسترس است. این پورت را در فایروال ابری برای نودها باز کنید و از تب **Nodes** پنل، دستور نصب یک‌بارمصرف هر Edge را بگیرید. جزئیات در [CLUSTER.md](CLUSTER.md) آمده است.
+- هنگام صدور اولین گواهی، پیشرفت را نمایش می‌دهد؛ بررسی DNS محدود به زمان است و اگر داشبورد پس از مهلت صدور گواهی آماده نشود، خطا اعلام می‌کند.
 
 > **از HyperDNS 1.x می‌آیید؟** اول `bash migrate-from-v1.sh` (از باندل آفلاین) را اجرا کنید، بعد نصب کنید.
 
@@ -107,7 +108,7 @@ sudo bash install.sh
 ```bash
 tar xzf hyperdns-v2.2.0-beta-linux-amd64-offline.tar.gz
 cd hyperdns-offline
-HYPERDNS_DOMAIN=dns.example.com HYPERDNS_EMAIL=you@example.com sudo bash install.sh
+sudo env HYPERDNS_DOMAIN=dns.example.com HYPERDNS_EMAIL=you@example.com bash install.sh
 ```
 
 </div>

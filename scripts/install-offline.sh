@@ -42,6 +42,106 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/opt/hyperdns"
 
+# Progress spinner. The HTTPS certificate is issued by the daemon itself at
+# first start (embedded Let's Encrypt client, ~7s observed, up to 5m advertised),
+# and the panel listener only binds AFTER that issuance completes. The whole
+# window used to show a frozen yellow line, which read as a hung install — the
+# single most reported "did it crash?" moment. This animates the wait instead.
+#
+# Safety: the animation is skipped when stdout is not a terminal, so it never
+# pollutes logs/CI/captures with frames, and a trap makes the background loop
+# die with the installer rather than outlive it.
+SPINNER_PID=""
+SPINNER_MSG=""
+SPINNER_LAST_LEN=0
+_spin_frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+_spin_idx=0
+_spinner_tick() {
+    # Advance one frame and re-render the message line in place. Writes a CR
+    # first and pads with spaces so a shorter message than the previous one
+    # does not leave trailing characters on the line.
+    #
+    # The loop key is SPINNER_ALIVE, not SPINNER_PID: the background tick is a
+    # forked subshell that copies the parent's variables AT FORK TIME, which is
+    # before the parent assigns SPINNER_PID=$!. Keying the loop on the PID would
+    # read a pre-assignment (stale or empty) value and exit immediately, so the
+    # animation would never run. SPINNER_ALIVE is set BEFORE the fork, so the
+    # copy the subshell takes is the live one.
+    while [ "${SPINNER_ALIVE:-0}" = "1" ]; do
+        _spin_idx=$(( (_spin_idx + 1) % ${#_spin_frames[@]} ))
+        # A background shell has its own copy of this value. spinner_msg
+        # restarts the animation when the stage changes.
+        local line="${_spin_frames[$_spin_idx]}  ${SPINNER_MSG}"
+        printf '\r\033[0;36m%s\033[0m' "$line"
+        # Pad to the previous line's width to fully overwrite it.
+        local pad=$(( SPINNER_LAST_LEN - ${#line} ))
+        [ "$pad" -gt 0 ] && printf '%*s' "$pad" ''
+        SPINNER_LAST_LEN=${#line}
+        # The cadence is slow enough to read but fast enough to look alive;
+        # a faster tick makes the spinner a distraction on a slow terminal.
+        sleep 0.25
+    done
+}
+spinner_start() {
+    # Only animate on a real terminal — never in CI, ssh -T or a redirected log.
+    if [ ! -t 1 ]; then
+        # Still print the message once, so a captured log explains the wait.
+        # Record it as the last-seen stage too: spinner_msg dedupes against
+        # this, so the initial message is not immediately re-printed by the
+        # first retry iteration of the calling loop.
+        if [ -n "$1" ]; then
+            echo -e "  ${CYAN}$1...${NC}"
+            SPINNER_LAST_MSG="$1"
+        fi
+        return 0
+    fi
+    SPINNER_MSG="${1:-Working...}"
+    # Keep the rendered width in the parent too: the background shell cannot
+    # update it, and spinner_stop must clear the previous stage before restart.
+    SPINNER_LAST_LEN=$(( ${#SPINNER_MSG} + 3 ))
+    SPINNER_LAST_MSG="${1:-}"
+    # Set the liveness flag BEFORE the fork so the subshell's copy is live
+    # (see _spinner_tick for why the PID cannot be the loop key).
+    SPINNER_ALIVE=1
+    _spinner_tick &
+    SPINNER_PID=$!
+    # If the installer dies while a spin is live, take the spinner with it —
+    # a leak would keep printing frames into the user's next prompt.
+    trap 'spinner_stop' EXIT
+}
+spinner_msg() {
+    # Update the message under a live spinner (e.g. "issuing certificate..."
+    # -> "binding listeners...").
+    if [ -z "$SPINNER_PID" ]; then
+        # No spinner (non-tty): print each DISTINCT stage once on its own line
+        # so a captured log still narrates the wait — but never repeat the same
+        # message, which the retry loops would otherwise spam every 3 seconds.
+        if [ -n "$1" ] && [ "$1" != "${SPINNER_LAST_MSG:-}" ]; then
+            echo -e "  ${CYAN}$1...${NC}"
+            SPINNER_LAST_MSG="$1"
+        fi
+        return 0
+    fi
+    if [ -n "$1" ] && [ "$1" != "${SPINNER_LAST_MSG:-}" ]; then
+        spinner_stop
+        spinner_start "$1"
+    fi
+}
+spinner_stop() {
+    # Drop the liveness flag first so the background loop exits on its next
+    # tick even if the kill below does not reach it.
+    SPINNER_ALIVE=0
+    if [ -n "$SPINNER_PID" ]; then
+        kill "$SPINNER_PID" 2>/dev/null || true
+        wait "$SPINNER_PID" 2>/dev/null || true
+        SPINNER_PID=""
+        # Clear the spinner line so the next output starts clean.
+        printf '\r%*s\r' "$SPINNER_LAST_LEN" ''
+        SPINNER_LAST_LEN=0
+    fi
+}
+# Progress spinner functions end here.
+
 # ==============================================================================
 # PUBLIC IP DETECTION (used by the domain prompt and the closing banner)
 # ==============================================================================
@@ -101,6 +201,60 @@ fi
 
 echo -e "  ${GREEN}✓ Found offline binary: ${SRC_BIN}${NC}"
 
+# Helper for reading user input cleanly in piped or interactive bash.
+# Order: real terminal → /dev/tty → plain stdin. The plain-stdin fallback is
+# what keeps `curl | bash` and other non-tty runs from looping forever on a
+# mandatory question: without it, every read returns "" and a required-input
+# while-loop spins eternally (the exact failure seen in the field).
+ask_user() {
+    local prompt_msg="$1"
+    local default_val="$2"
+    local user_var=""
+
+    printf "%b" "${prompt_msg}" >&2
+    if [ -t 0 ]; then
+        read -r user_var || user_var=""
+    elif (exec </dev/tty) 2>/dev/null; then
+        read -r user_var </dev/tty 2>/dev/null || user_var=""
+    else
+        read -r user_var || user_var=""
+    fi
+
+    if [ -z "${user_var}" ]; then
+        echo "${default_val}"
+    else
+        echo "${user_var}"
+    fi
+}
+
+# Standalone remains the default for unattended installs. Select the role
+# before changing an existing installation, and verify binary support now.
+INSTALL_ROLE="${HYPERDNS_ROLE:-}"
+if [ -z "$INSTALL_ROLE" ]; then
+    if [ -t 0 ] || (exec </dev/tty) 2>/dev/null; then
+        _enable_nodes=$(ask_user " ${BOLD}${CYAN}? Enable controller for edge nodes? [y/N]: ${NC}" "n")
+        case "${_enable_nodes}" in
+            y|Y|yes|YES) INSTALL_ROLE=controller ;;
+            *) INSTALL_ROLE=standalone ;;
+        esac
+    else
+        INSTALL_ROLE=standalone
+    fi
+fi
+case "$INSTALL_ROLE" in
+    standalone|controller) ;;
+    *) echo -e "${RED}[Error] HYPERDNS_ROLE must be standalone or controller.${NC}" >&2; exit 1 ;;
+esac
+if [ "$INSTALL_ROLE" = controller ] && ! ("${SRC_BIN}" -h 2>&1 | grep -q -- '-role string'); then
+    echo -e "${RED}[Error] The selected HyperDNS binary does not support controller mode.${NC}" >&2
+    echo -e "${YELLOW}Use a release or offline bundle built with cluster support.${NC}" >&2
+    exit 1
+fi
+echo -e "  ${GREEN}✓ Install role: ${INSTALL_ROLE}${NC}"
+TARGET_VERSION="$("${SRC_BIN}" -version 2>/dev/null | head -n1 || true)"
+[ -n "$TARGET_VERSION" ] || TARGET_VERSION="unknown"
+
+
 install -d -o root -g root -m 0755 "${INSTALL_DIR}"
 install -d -o root -g root -m 0700 "${INSTALL_DIR}/certs"
 
@@ -126,7 +280,7 @@ if [ -f "${INSTALL_DIR}/hyperdns" ] || [ -f "${INSTALL_DIR}/config.json" ] || [ 
     echo -e "${YELLOW}${BOLD}\u250c${NC}"
     echo -e "${YELLOW}│ SAFE INSTALL — an existing HyperDNS installation was detected${NC}"
     echo -e "${YELLOW}│ • Installed Version : ${CYAN}${PREV_VERSION}${NC}"
-    echo -e "${YELLOW}│ • Target Version    : ${GREEN}v2.2.0 (this package)${NC}"
+    echo -e "${YELLOW}│ • Target Version    : ${GREEN}${TARGET_VERSION}${NC}"
     echo -e "${YELLOW}│ • Mode              : ${GREEN}Fresh install — old data ARCHIVED, then REPLACED${NC}"
     echo -e "${YELLOW}\u2514${NC}"
     echo ""
@@ -403,32 +557,6 @@ echo -e "${YELLOW}│ A panel domain with HTTPS is REQUIRED (Let's Encrypt).    
 echo -e "${YELLOW}│ The dashboard is NOT reachable as a bare IP over plain HTTP.           │${NC}"
 echo -e "${YELLOW}└────────────────────────────────────────────────────────────────────────┘${NC}"
 
-# Helper for reading user input cleanly in piped or interactive bash.
-# Order: real terminal → /dev/tty → plain stdin. The plain-stdin fallback is
-# what keeps `curl | bash` and other non-tty runs from looping forever on a
-# mandatory question: without it, every read returns "" and a required-input
-# while-loop spins eternally (the exact failure seen in the field).
-ask_user() {
-    local prompt_msg="$1"
-    local default_val="$2"
-    local user_var=""
-
-    printf "%b" "${prompt_msg}" >&2
-    if [ -t 0 ]; then
-        read -r user_var || user_var=""
-    elif (exec </dev/tty) 2>/dev/null; then
-        read -r user_var </dev/tty 2>/dev/null || user_var=""
-    else
-        read -r user_var || user_var=""
-    fi
-
-    if [ -z "${user_var}" ]; then
-        echo "${default_val}"
-    else
-        echo "${user_var}"
-    fi
-}
-
 USER_DOMAIN=""
 USER_EMAIL=""
 IS_HTTPS=false
@@ -514,7 +642,7 @@ echo -e "  ${GREEN}? Custom domain '${USER_DOMAIN}' configured with HTTPS (manda
 echo ""
 echo -e "${CYAN}${BOLD}[4b/6] Verifying DNS for ${USER_DOMAIN} (the daemon issues its certificate at first start)...${NC}"
 if command -v dig >/dev/null 2>&1; then
-    _resolved=$(dig +short "${USER_DOMAIN}" A 2>/dev/null | tail -1)
+    _resolved=$(dig +time=2 +tries=1 +short "${USER_DOMAIN}" A 2>/dev/null | tail -1)
     if [ -n "${_resolved}" ] && [ "${_resolved}" != "${PUBLIC_IP}" ]; then
         echo -e "${YELLOW}  Note: ${USER_DOMAIN} currently resolves to ${_resolved}, not ${PUBLIC_IP}.${NC}"
         echo -e "${YELLOW}  The certificate cannot be issued until the A record points here; the daemon will keep retrying daily.${NC}"
@@ -532,6 +660,31 @@ fi
 # STEP 5: SYSTEMD SERVICE SETUP
 # ==============================================================================
 echo -e "${CYAN}${BOLD}[5/6] Creating & Starting Systemd Background Service...${NC}"
+if [ "$INSTALL_ROLE" = controller ]; then
+    # The panel hostname is the reachable mTLS endpoint for edge enrollment.
+    # Domain validation above limits this value to a safe hostname.
+    CONTROLLER_URL="https://${USER_DOMAIN}:9443"
+    if command -v ufw >/dev/null 2>&1; then
+        UFW_ADDED="$(ufw show added 2>/dev/null || true)"
+        if ! printf '%s\n' "$UFW_ADDED" | grep -qxF 'ufw allow 9443/tcp'; then
+            if ufw allow 9443/tcp >/dev/null 2>&1; then
+                echo 'ufw 9443/tcp' >> "$FIREWALL_MARKER"
+            else
+                echo -e "  ${YELLOW}Could not add TCP 9443 to UFW; open it manually for edge hosts.${NC}"
+            fi
+        fi
+    elif command -v firewall-cmd >/dev/null 2>&1; then
+        if ! firewall-cmd --permanent --query-port=9443/tcp >/dev/null 2>&1; then
+            if firewall-cmd --permanent --add-port=9443/tcp >/dev/null 2>&1; then
+                echo 'firewalld 9443/tcp' >> "$FIREWALL_MARKER"
+                firewall-cmd --reload >/dev/null 2>&1 || true
+            else
+                echo -e "  ${YELLOW}Could not add TCP 9443 to firewalld; open it manually for edge hosts.${NC}"
+            fi
+        fi
+    fi
+    echo -e "  ${CYAN}Edge nodes will connect to ${CONTROLLER_URL} (allow TCP 9443 in the cloud firewall too).${NC}"
+fi
 cat << 'EOF' > /etc/systemd/system/hyperdns.service
 [Unit]
 Description=HyperDNS — Standalone SmartDNS & Gaming Gateway
@@ -588,8 +741,28 @@ EOF
 # any local user can rewrite ExecStart and have systemd run it as root on the next boot.
 chmod 644 /etc/systemd/system/hyperdns.service
 
+if [ "$INSTALL_ROLE" = controller ]; then
+    # systemd parses ExecStart as arguments, not through a shell.
+    sed -i "s|-key /opt/hyperdns/master.key|-key /opt/hyperdns/master.key -role controller -controller-url ${CONTROLLER_URL} -cluster-bind 0.0.0.0:9443|" /etc/systemd/system/hyperdns.service
+fi
+
 systemctl daemon-reload
 systemctl enable hyperdns >/dev/null 2>&1
+
+# Mark the journal position BEFORE this start. The health step below reads the
+# daemon's own log lines to find the port and admin path it actually bound,
+# and the journal still carries every previous lifecycle — including a prior
+# install's "Dashboard : ... :<old-port>/" line. Reading -n 120 picked that
+# stale line up while the new daemon was still issuing its certificate, so the
+# probes spent their whole budget hammering a port nothing was listening on
+# (observed: install said 55800, probes targeted 37823 and got 000).
+# The cursor is the exact monotonic position; the timestamp backs it up when a
+# cursor could not be captured. Both exclude a reinstall in the same boot,
+# which -b would not.
+BOOT_TIME=$(date +%s)
+BOOT_CURSOR="$(journalctl -u hyperdns -n 0 --show-cursor 2>/dev/null | sed -n 's/^-- cursor: //p')"
+export BOOT_CURSOR BOOT_TIME
+
 systemctl restart hyperdns
 
 sleep 2
@@ -627,20 +800,57 @@ fi
 # random management port per install — probing a hardcoded 8443 reported a
 # healthy daemon as failed (curl 000, connection refused) on the first v2.2.0
 # field install.
+#
+# The dashboard line only prints AFTER the ACME issuance completes and the
+# listener binds — observed ~7s on a cold install, and the daemon advertises up
+# to 5m. A 5-second window therefore expired before the line existed, and the
+# port fell through to the config.json web_port below — which is the port the
+# install intended, not necessarily the one a restarted daemon actually bound
+# (a restart can re-draw it). Waiting for the real line is what keeps the
+# probes aimed at the live listener.
 ADMIN_PATH=""
 PANEL_PORT_LIVE=""
-for _ in 1 2 3 4 5; do
-    _JOURNAL=$(journalctl -u hyperdns --no-pager -n 120 2>/dev/null)
+# The wait below is exactly the ACME issuance window: the daemon requests a
+# Let's Encrypt certificate for the domain, completes the HTTP-01 challenge on
+# port 80, writes the pair, and only then binds the panel listener and prints
+# its "Dashboard :" line. That is the whole ~7s (up to 5m) the user stares at a
+# frozen prompt, so animate it and narrate the stage.
+spinner_start "Starting the daemon and issuing the ${USER_DOMAIN} certificate (Let's Encrypt)..."
+for _ in $(seq 1 300); do
+    _JOURNAL=""
+    if [ -n "${BOOT_CURSOR}" ]; then
+        _JOURNAL=$(journalctl -u hyperdns --no-pager --after-cursor="${BOOT_CURSOR}" 2>/dev/null)
+    fi
+    # Fall back to a time bound — never back to -n 120, which would re-read a
+    # previous install's port from this same boot.
+    if [ -z "${_JOURNAL}" ]; then
+        _JOURNAL=$(journalctl -u hyperdns --no-pager --since "@${BOOT_TIME}" 2>/dev/null)
+    fi
+    _boot_error=$(printf '%s\n' "${_JOURNAL}" | grep -E '\[TLS\] embedded ACME for .* failed:|\[Main\] Failed to start (Web Server|cluster listener):' | tail -1 || true)
+    if [ -n "$_boot_error" ]; then
+        spinner_stop
+        echo -e "${RED}[Error] HyperDNS could not finish startup: ${_boot_error}${NC}" >&2
+        exit 1
+    fi
     ADMIN_PATH=$(printf '%s' "${_JOURNAL}" | grep -oE "/[0-9a-f]{16}/dash/login" | tail -1 | cut -d'/' -f2)
     PANEL_PORT_LIVE=$(printf '%s' "${_JOURNAL}" | grep -oE "Dashboard : https://0\.0\.0\.0:[0-9]+/" | grep -oE "[0-9]+" | tail -1)
     [ -n "$ADMIN_PATH" ] && [ -n "$PANEL_PORT_LIVE" ] && break
+    # Narrate the issuance stage once the daemon has logged which one it is in,
+    # so the wait reads as progress rather than a hang.
+    case "$_" in
+        3)  spinner_msg "Requesting a certificate for ${USER_DOMAIN} (Let's Encrypt)...";;
+        10) spinner_msg "Completing the HTTP-01 challenge and validating the domain...";;
+        25|85|145|205|265) spinner_msg "Still issuing the certificate for ${USER_DOMAIN} (${_} seconds elapsed; up to 5 minutes)...";;
+    esac
     sleep 1
 done
+spinner_stop
 if [ -z "$PANEL_PORT_LIVE" ]; then
     # Fall back to the stored config's web_port; the journal line only prints
     # once per boot and an upgrade may have missed it in the window above.
     PANEL_PORT_LIVE=$(python3 -c "import json;print(json.load(open('${INSTALL_DIR}/config.json'))['server'].get('web_port',''))" 2>/dev/null || true)
 fi
+[ -n "$ADMIN_PATH" ] || { echo -e "${RED}[Error] Dashboard did not become ready within 5 minutes. Inspect: journalctl -u hyperdns -n 80 --no-pager${NC}" >&2; exit 1; }
 [ -n "$PANEL_PORT_LIVE" ] && [ -n "${PANEL_PORT:-}" ] && PANEL_PORT="${PANEL_PORT_LIVE}"
 
 # End-to-end HTTPS health gate. Everything below is verified against the real
@@ -649,12 +859,44 @@ fi
 # namespace asset regression this gate exists to catch.
 HEALTH_OK=true
 HEALTH_DETAIL=""
+# One shared deadline for every probe below. The HTTPS listener is not up the
+# moment systemd reports the process active: on a cold install the daemon first
+# issues its Let's Encrypt certificate through the built-in ACME client
+# (observed ~7s, advertised up to 5m) and only then binds the panel port. A
+# single probe fired inside that window gets 000 — connection refused — and
+# reports an install that actually succeeded as a failure. That false negative
+# is what made the v2.2.0 offline install look broken while the daemon ran
+# fine for fifteen minutes behind it. Retrying until the listener answers
+# fixes it: a refused port returns in ~0ms, so a ready install pays no penalty,
+# and a genuinely broken one is held to this single budget instead of N x it.
+HEALTH_DEADLINE=$(( $(date +%s) + 60 ))
 if [ "$IS_HTTPS" = true ] && [ -n "$USER_DOMAIN" ] && [ -n "$ADMIN_PATH" ] && [ -n "$PANEL_PORT_LIVE" ]; then
     _resolve="--resolve ${USER_DOMAIN}:${PANEL_PORT_LIVE}:127.0.0.1"
     for _probe in "dash:${ADMIN_PATH}/dash/" "css:${ADMIN_PATH}/css/tailwind.purged.css" "js:${ADMIN_PATH}/js/app.js"; do
         _name="${_probe%%:*}"
         _path="${_probe#*:}"
-        _code=$(curl -sS ${_resolve} --connect-timeout 4 --max-time 8 -o /dev/null -w '%{http_code}' "https://${USER_DOMAIN}:${PANEL_PORT_LIVE}/${_path}" 2>/dev/null || echo 000)
+        _code=000
+        spinner_start "Verifying the HTTPS endpoint: ${_name} (https://${USER_DOMAIN}:${PANEL_PORT_LIVE}/${_path})"
+        while [ "$(date +%s)" -lt "${HEALTH_DEADLINE}" ]; do
+            # curl's -w already prints 000 on a connection failure, so a
+            # trailing `|| echo 000` only concatenates a second one and the
+            # failure line read "returned 000000". `|| true` keeps set -e
+            # quiet; the guard covers curl being absent entirely. A real
+            # 404/503 is left intact — that is the asset regression this gate
+            # exists to catch, and collapsing it to 000 would hide it.
+            _code=$(curl -sS ${_resolve} --connect-timeout 4 --max-time 8 -o /dev/null -w '%{http_code}' "https://${USER_DOMAIN}:${PANEL_PORT_LIVE}/${_path}" 2>/dev/null || true)
+            [ -n "${_code}" ] || _code=000
+            [ "${_code}" = "200" ] && break
+            # Narrate the wait: a 000 here is the normal pre-listener window,
+            # not a failure, and this is exactly where the user decides the
+            # install hung. Name the reason so it reads as progress.
+            case "${_code}" in
+                000) spinner_msg "Waiting for the HTTPS listener (the certificate is being issued for ${USER_DOMAIN})...";;
+                *)   spinner_msg "Endpoint returned ${_code}, expected 200 — re-checking...";;
+            esac
+            sleep 3
+        done
+        spinner_stop
         if [ "${_code}" = "200" ]; then
             echo -e "  ${GREEN}✓ HTTPS ${_name} endpoint verified on port ${PANEL_PORT_LIVE} (200, trusted certificate).${NC}"
         else
@@ -719,6 +961,10 @@ echo ""
 echo -e "  ${BOLD}🎮 Dedicated Primary DNS IP:${NC} ${CYAN}${PUBLIC_IP}${NC}"
 echo -e "  ${BOLD}🖥️  Terminal console:${NC}       run ${PURPLE}hdns${NC} anytime — it talks to the running service over its control socket (live telemetry, stop/start/uninstall included); ${PURPLE}hdns status${NC} and ${PURPLE}hdns flush${NC} also work beside the daemon"
 echo -e "  ${BOLD}📂 Config File Location:${NC}   ${YELLOW}/opt/hyperdns/config.json${NC}"
+if [ "$INSTALL_ROLE" = controller ]; then
+    echo -e "  ${BOLD}🔗 Edge controller:${NC}        ${CYAN}${CONTROLLER_URL}${NC}"
+    echo -e "  ${CYAN}Create edge nodes in the dashboard Nodes tab, then run each one-time install command on its edge host.${NC}"
+fi
 echo ""
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════════════════════${NC}"
 echo ""

@@ -99,6 +99,10 @@ curl -fsSL https://raw.githubusercontent.com/IzumiRain/HyperDNS/v2.2.0-beta.1/sc
 > **The installer never upgrades in place.** An existing install is archived to `/root/hyperdns-preinstall-<date>.tar.gz` (its sha256 printed — the only copy of the old data), then **replaced**: fresh config, fresh credentials, fresh certificates. An interactive run types `FRESH` to confirm the wipe; a piped `curl | bash` run refuses unless `HYPERDNS_FRESH=1` is set. Coming from **HyperDNS 1.x**, run `bash migrate-from-v1.sh` from the offline bundle first.
 >
 > **A panel domain is mandatory** — its A record must point at the server. The daemon issues the Let's Encrypt certificate **itself** over its own port-80 listener: no certbot, no acme.sh, nothing to stop the service for. Non-interactive: `HYPERDNS_DOMAIN=dns.example.com HYPERDNS_EMAIL=you@example.com bash install.sh`. If issuance fails the installer states the cause and exits rather than printing success. Renewal is daily and automatic.
+
+> **Edge nodes:** The interactive installer can enable the controller role. For an unattended controller install, set `HYPERDNS_ROLE=controller` alongside `HYPERDNS_DOMAIN` and `HYPERDNS_EMAIL`. Open TCP 9443 from edge hosts in the cloud firewall, then create nodes in the dashboard's **Nodes** tab and run each node's one-time install command on its edge host. See [CLUSTER.md](docs/CLUSTER.md). The default role is `standalone`.
+
+> The one-line `v2.2.0-beta.1` command above is the older published installer. Controller setup requires a matching cluster-capable binary and the installer from this revision; use the [current-source instructions](docs/CLUSTER.md) until that release is published.
 >
 > **Subscribers self-serve IP changes** through a secret: `/sub/<token>` is a read-only portal, and moving the binding is `POST /ip/<token>` with the account's registration secret. A leaked portal link alone cannot steal the binding.
 

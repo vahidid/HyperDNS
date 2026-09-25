@@ -84,9 +84,8 @@ curl -fsSL https://raw.githubusercontent.com/IzumiRain/HyperDNS/v2.2.0-beta.1/sc
   -o install.sh
 
 # Required: the panel domain, and an email for the certificate authority
-HYPERDNS_DOMAIN=dns.example.com \
-HYPERDNS_EMAIL=you@example.com \
-sudo bash install.sh
+sudo env HYPERDNS_DOMAIN=dns.example.com \
+  HYPERDNS_EMAIL=you@example.com bash install.sh
 ```
 
 ### 1b. What the installer does (and what it refuses to do)
@@ -108,6 +107,15 @@ sudo bash install.sh
 - Sets `systemd-resolved` aside (it binds 127.0.0.53:53 and would block port 53)
   via a drop-in at `/etc/systemd/resolved.conf.d/hyperdns.conf`, with safe
   permissions (`755` on the directory, `644` on the file).
+- Offers controller setup for edge nodes during installation. For
+  unattended installs use `HYPERDNS_ROLE=controller`; the default is
+  `standalone`. Controller mode listens on TCP 9443 at the panel domain.
+  Open that port to edge hosts in the cloud firewall, then enroll edges from
+  the dashboard's **Nodes** tab using their one-time install commands. See
+  [CLUSTER.md](CLUSTER.md).
+- Shows progress while the first certificate is issued. The DNS pre-check is
+  time bounded, and the installer reports an error if the dashboard is still
+  unavailable after the certificate issuance window.
 
 > **Coming from HyperDNS 1.x?** Run `bash migrate-from-v1.sh` from the offline
 > bundle **first**, then install.
@@ -121,7 +129,7 @@ Copy it to the server and:
 ```bash
 tar xzf hyperdns-v2.2.0-beta-linux-amd64-offline.tar.gz
 cd hyperdns-offline
-HYPERDNS_DOMAIN=dns.example.com HYPERDNS_EMAIL=you@example.com sudo bash install.sh
+sudo env HYPERDNS_DOMAIN=dns.example.com HYPERDNS_EMAIL=you@example.com bash install.sh
 ```
 
 The bundle's own `verify_bundle.py` re-checks every file's checksum before you

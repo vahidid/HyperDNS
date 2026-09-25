@@ -87,9 +87,10 @@ def stub(command, args):
             print(f'Dashboard : https://0.0.0.0:{port}/{ADMIN_PATH}/dash/login')
             return 0
     elif command == 'ufw':
-        if args == ['show', 'added'] or (len(args) == 2 and args[0] == 'allow' and args[1].isdigit()):
+        if args == ['show', 'added'] or (len(args) == 2 and args[0] == 'allow'
+                                         and (args[1].isdigit() or args[1] == '9443/tcp')):
             return 0
-    elif command == 'dig' and args == ['+short', DOMAIN, 'A']:
+    elif command == 'dig' and args == ['+time=2', '+tries=1', '+short', DOMAIN, 'A']:
         print('192.0.2.10')
         return 0
     # Record unexpected calls even if install.sh suppresses their exit status.
@@ -112,7 +113,8 @@ def inside():
         script.chmod(0o755)
     env = dict(os.environ, PATH=f'{stubs}:/usr/bin:/bin', TERM='dumb',
                HYPERDNS_REF=REF, HYPERDNS_DOMAIN=DOMAIN,
-               HYPERDNS_EMAIL='smoke@example.invalid')
+               HYPERDNS_EMAIL='smoke@example.invalid',
+               HYPERDNS_ROLE='controller')
     result = subprocess.run(['bash', '-x', '/smoke/install.sh'], cwd=FIXTURE,
                             env=env, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -142,6 +144,10 @@ def inside():
         assert os.access(target / 'hyperdns', os.X_OK)
         assert (target / 'scripts/restore.sh').stat().st_mode & 0o777 == 0o755
         assert Path('/usr/local/bin/hdns').resolve() == target / 'hyperdns'
+        unit = Path('/etc/systemd/system/hyperdns.service').read_text()
+        assert '-role controller -controller-url https://' + DOMAIN + ':9443' in unit
+        assert '-cluster-bind 0.0.0.0:9443' in unit
+        assert 'ufw 9443/tcp' in (target / '.firewall-backup').read_text()
         # Execute ONLY the real pre-DB version command, never daemon/ACME startup.
         version = subprocess.check_output([str(target / 'hyperdns'), '-version'],
                                           cwd=target, text=True, timeout=10).strip()

@@ -7,8 +7,33 @@ address or geographic routing yet.
 
 ## 1. Controller
 
-Back up `data.db` and `master.key`, install the new binary, and add these
-arguments to the existing daemon's systemd `ExecStart`:
+For a fresh controller install, choose **Enable controller for edge nodes** in
+the interactive installer. The installer checks that the selected binary
+supports controller mode before changing an existing installation. For an
+unattended install, set
+`HYPERDNS_ROLE=controller`, `HYPERDNS_DOMAIN`, and `HYPERDNS_EMAIL`. The
+installer uses the panel domain as the controller endpoint on port 9443 and
+configures the systemd service and host firewall.
+
+The older `v2.2.0-beta.1` one-line release command does not include controller
+mode. Until a matching release is published, build the Linux binary from this
+checkout and run its offline installer from the repository root. On a Linux
+host with Go installed:
+
+```sh
+CGO_ENABLED=0 go build -trimpath -o hyperdns ./cmd/hyperdns
+sudo env HYPERDNS_DOMAIN=dns.example.com HYPERDNS_EMAIL=admin@example.com \
+  HYPERDNS_ROLE=controller bash scripts/install-offline.sh
+```
+
+The installer rejects an incompatible binary before changing an existing
+installation. For another host architecture, cross-build the binary for that
+host and place it as `./hyperdns` beside the repository's config template
+before running the same installer.
+
+For an **existing** installation, back up `data.db` and `master.key`, update
+the binary, and add these arguments to the existing daemon's systemd
+`ExecStart`:
 
 ```text
 -role controller -controller-url https://CONTROLLER_HOST:9443 -cluster-bind 0.0.0.0:9443
